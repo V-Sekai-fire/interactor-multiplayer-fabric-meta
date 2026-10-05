@@ -10,7 +10,9 @@ Each script starts the simulator, activates it as the system OpenXR runtime, che
 
     elixir activate_smoke_test.exs
 
-On Windows, run `activate_smoke_test_windows.exs` the same way from an elevated shell. The simulator is installed separately.
+On macOS the simulator's `MetaXRSimulator.app` bundle must sit beside the script, which runs the bundle's activation script with `sudo`. On Windows, run `activate_smoke_test_windows.exs` the same way from an elevated shell; it looks for the simulator beside the script and under `Program Files`.
+
+Both scripts need a reachable test database, named by `TEST_DATABASE_URL` or the `TEST_DB_*` variables, or by certificates under `../multiplayer-fabric-hosting/certs/crdb`.
 
 ## Licence
 
