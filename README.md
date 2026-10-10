@@ -14,4 +14,4 @@ On Windows, run `activate_smoke_test_windows.exs` the same way from an elevated 
 
 ## Licence
 
-The repository states no licence.
+MIT. See [LICENSE](LICENSE).
