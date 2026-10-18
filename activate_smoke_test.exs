@@ -1,16 +1,14 @@
 #!/usr/bin/env elixir
 # Activate Meta XR Simulator as the system OpenXR runtime and record the
-# result in CockroachDB via the taskweft Postgrex pool.
+# result in SQLite (in FoundationDB when SMOKE_WEFTFDB_EXTENSION is set).
 #
 # Usage (from multiplayer-fabric-meta/):
 #   elixir activate_smoke_test.exs
 #
-# Uses the same DB connection env vars as multiplayer-fabric-taskweft:
-#   TEST_DATABASE_URL  or  TEST_DB_HOST / TEST_DB_PORT / TEST_DB_NAME etc.
-# Falls back to the local Docker CRDB stack if certs exist at the default path.
+# Database: SMOKE_DB, SMOKE_WEFTFDB_EXTENSION (see open_db/0).
 
 Mix.install([
-  {:postgrex, "~> 0.19"},
+  {:exqlite, "~> 0.42"},
   {:jason, "~> 1.4"}
 ])
 
@@ -22,62 +20,93 @@ defmodule MetaXRSmokeTest do
     1. ensure_app_running  – launch MetaXRSimulator.app if not running
     2. activate_runtime    – sudo bash activate_simulator.sh
     3. verify_runtime      – confirm active_runtime.json points to Meta XR
-    4. record_result       – persist outcome to CRDB smoke_test_runs table
+    4. record_result       – persist outcome to the smoke_test_runs table
   """
 
   @app_bundle Path.expand("MetaXRSimulator.app", Path.dirname(__ENV__.file))
   @activate_sh Path.join([@app_bundle, "Contents/Resources/MetaXRSimulator/activate_simulator.sh"])
   @runtime_json "/usr/local/share/openxr/1/active_runtime.json"
 
-  @default_certs Path.expand(
-    "../multiplayer-fabric-hosting/certs/crdb",
-    Path.dirname(__ENV__.file)
-  )
 
-  # ── DB connection ──────────────────────────────────────────────────────────
+  # ── DB ─────────────────────────────────────────────────────────────────────
+  #
+  # SQLite. SMOKE_DB names the database. With SMOKE_WEFTFDB_EXTENSION set
+  # (datasource-store's weftfdb), the default is file:smoke_test.v1?vfs=weft_fdb,
+  # whose pages live in FoundationDB; otherwise smoke_test.sqlite3 beside this script.
 
-  defp conn_opts do
-    case System.get_env("TEST_DATABASE_URL") do
-      url when is_binary(url) and url != "" ->
-        [url: url]
+  defp open_db do
+    extension = System.get_env("SMOKE_WEFTFDB_EXTENSION")
 
-      _ ->
-        ca   = System.get_env("TEST_DB_CA_CERT",   Path.join(@default_certs, "ca.crt"))
-        cert = System.get_env("TEST_DB_CERT",      Path.join(@default_certs, "client.root.crt"))
-        key  = System.get_env("TEST_DB_KEY",       Path.join(@default_certs, "client.root.key"))
-        host = System.get_env("TEST_DB_HOST", "localhost")
-        port = System.get_env("TEST_DB_PORT", "26257") |> String.to_integer()
-        db   = System.get_env("TEST_DB_NAME", "taskweft_test")
-        user = System.get_env("TEST_DB_USER", "root")
-        sni  = System.get_env("TEST_DB_SNI",  "localhost") |> String.to_charlist()
+    db =
+      System.get_env("SMOKE_DB") ||
+        if(extension,
+          do: "file:smoke_test.v1?vfs=weft_fdb",
+          else: Path.expand("smoke_test.sqlite3", Path.dirname(__ENV__.file))
+        )
 
-        base = [hostname: host, port: port, database: db, username: user]
+    with :ok <- load_extension(extension),
+         {:ok, conn} <- Exqlite.Sqlite3.open(db),
+         :ok <- pragmas(conn, extension) do
+      {:ok, conn}
+    end
+  end
 
-        if File.exists?(ca) do
-          base ++ [ssl: [cacertfile: ca, certfile: cert, keyfile: key,
-                         server_name_indication: sni, verify: :verify_peer]]
-        else
-          base
+  # A weft_fdb database is opened the way zone-backend opens one: the
+  # rollback journal in memory and the database held by this connection.
+  defp pragmas(_conn, nil), do: :ok
+
+  defp pragmas(conn, _extension) do
+    Exqlite.Sqlite3.execute(conn, "PRAGMA journal_mode = MEMORY; PRAGMA locking_mode = EXCLUSIVE")
+  end
+
+  defp load_extension(nil), do: :ok
+
+  # The weft_fdb VFS registers process-wide and starts FoundationDB's network
+  # thread, which can start only once per process, so it is loaded once.
+  defp load_extension(path) do
+    key = {__MODULE__, :weftfdb, path}
+
+    if :persistent_term.get(key, false) do
+      :ok
+    else
+      {:ok, tmp} = Exqlite.Sqlite3.open(":memory:")
+
+      try do
+        with :ok <- Exqlite.Sqlite3.enable_load_extension(tmp, true),
+             :ok <-
+               Exqlite.Sqlite3.execute(tmp, "SELECT load_extension('#{String.replace(path, "'", "''")}')") do
+          :persistent_term.put(key, true)
+          :ok
         end
+      after
+        Exqlite.Sqlite3.close(tmp)
+      end
     end
   end
 
   defp ensure_schema!(conn) do
-    Postgrex.query!(conn, """
-      CREATE TABLE IF NOT EXISTS smoke_test_runs (
-        id      BIGSERIAL PRIMARY KEY,
-        run_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-        step    TEXT NOT NULL,
-        status  TEXT NOT NULL,
-        detail  TEXT
-      )
-    """, [])
+    :ok =
+      Exqlite.Sqlite3.execute(conn, """
+        CREATE TABLE IF NOT EXISTS smoke_test_runs (
+          id      INTEGER PRIMARY KEY,
+          run_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          step    TEXT NOT NULL,
+          status  TEXT NOT NULL,
+          detail  TEXT
+        )
+      """)
   end
 
   defp record(conn, step, status, detail) do
-    Postgrex.query!(conn, """
-      INSERT INTO smoke_test_runs (step, status, detail) VALUES ($1, $2, $3)
-    """, [step, to_string(status), detail])
+    {:ok, stmt} =
+      Exqlite.Sqlite3.prepare(
+        conn,
+        "INSERT INTO smoke_test_runs (step, status, detail) VALUES (?1, ?2, ?3)"
+      )
+
+    :ok = Exqlite.Sqlite3.bind(stmt, [step, to_string(status), detail])
+    :done = Exqlite.Sqlite3.step(conn, stmt)
+    Exqlite.Sqlite3.release(conn, stmt)
   end
 
   # ── Steps ──────────────────────────────────────────────────────────────────
@@ -128,7 +157,7 @@ defmodule MetaXRSmokeTest do
 
   def run do
     IO.puts("=== Meta XR Simulator smoke test ===")
-    {:ok, conn} = Postgrex.start_link([name: :smoke_test_pool] ++ conn_opts())
+    {:ok, conn} = open_db()
     ensure_schema!(conn)
 
     [&ensure_app_running/1, &activate_runtime/1, &verify_runtime/1]
@@ -136,7 +165,7 @@ defmodule MetaXRSmokeTest do
 
     record(conn, "smoke_test", "ok", "all steps passed")
     IO.puts("\n=== PASS: all steps recorded to smoke_test_runs ===")
-    GenServer.stop(conn)
+    Exqlite.Sqlite3.close(conn)
   end
 end
 
