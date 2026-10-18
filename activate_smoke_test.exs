@@ -105,7 +105,9 @@ defmodule MetaXRSmokeTest do
       )
 
     :ok = Exqlite.Sqlite3.bind(stmt, [step, to_string(status), detail])
-    :done = Exqlite.Sqlite3.step(conn, stmt)
+    # fetch_all, not step: it runs on a dirty scheduler, where a weft_fdb
+    # write can block on FoundationDB.
+    {:ok, []} = Exqlite.Sqlite3.fetch_all(conn, stmt)
     Exqlite.Sqlite3.release(conn, stmt)
   end
 
