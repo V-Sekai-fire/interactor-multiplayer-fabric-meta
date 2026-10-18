@@ -3,3 +3,4 @@ MetaXRSimulator/
 MetaXRSimulator.exe
 *.msi
 .DS_Store
+smoke_test.sqlite3
