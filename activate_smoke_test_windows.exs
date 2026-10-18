@@ -64,15 +64,26 @@ defmodule MetaXRSmokeTest.Windows do
 
   defp load_extension(nil), do: :ok
 
+  # The weft_fdb VFS registers process-wide and starts FoundationDB's network
+  # thread, which can start only once per process, so it is loaded once.
   defp load_extension(path) do
-    {:ok, tmp} = Exqlite.Sqlite3.open(":memory:")
+    key = {__MODULE__, :weftfdb, path}
 
-    try do
-      with :ok <- Exqlite.Sqlite3.enable_load_extension(tmp, true) do
-        Exqlite.Sqlite3.execute(tmp, "SELECT load_extension('#{String.replace(path, "'", "''")}')")
+    if :persistent_term.get(key, false) do
+      :ok
+    else
+      {:ok, tmp} = Exqlite.Sqlite3.open(":memory:")
+
+      try do
+        with :ok <- Exqlite.Sqlite3.enable_load_extension(tmp, true),
+             :ok <-
+               Exqlite.Sqlite3.execute(tmp, "SELECT load_extension('#{String.replace(path, "'", "''")}')") do
+          :persistent_term.put(key, true)
+          :ok
+        end
+      after
+        Exqlite.Sqlite3.close(tmp)
       end
-    after
-      Exqlite.Sqlite3.close(tmp)
     end
   end
 

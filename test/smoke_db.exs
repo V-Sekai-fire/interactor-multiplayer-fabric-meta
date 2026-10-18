@@ -18,6 +18,8 @@ for file <- System.argv() do
     |> String.replace(~r/^Mix\.install\(\[.*?\]\)\n/ms, "")
     |> String.replace(~r/^MetaXRSmokeTest[\w.]*\.run\(\)\s*$/m, "")
     |> String.replace(~r/defmodule MetaXRSmokeTest[\w.]*/, "defmodule Harness#{:erlang.phash2(file)}")
+    # Both scripts' modules share one load key: the extension loads once per process.
+    |> String.replace("{__MODULE__, :weftfdb, path}", "{:smoke_weftfdb, path}")
     |> String.replace(~r/defp (open_db|ensure_schema!|record)(?=[\s(])/, "def \\1")
 
   n = System.unique_integer([:positive])
