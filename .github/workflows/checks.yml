@@ -44,7 +44,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: V-Sekai-fire/datasource-store
-          ref: bf5d552f5dee0fc871b474c5362ad782a49e89c7
+          ref: f2dd10e4bd9d20d94f80aa9fcea1f466a5b55999
           path: datasource-store
       - name: Build the weftfdb extension
         working-directory: datasource-store
