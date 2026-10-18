@@ -31,8 +31,11 @@ for file <- System.argv() do
 
   System.put_env("SMOKE_DB", db)
   [{mod, _}] = Code.compile_string(src, file)
+  IO.puts(:stderr, "DIAG compiled #{file}, opening #{db}")
   {:ok, conn} = mod.open_db()
+  IO.puts(:stderr, "DIAG opened")
   :ok = mod.ensure_schema!(conn)
+  IO.puts(:stderr, "DIAG schema")
   mod.record(conn, "verify_runtime", :ok, "detail")
   mod.record(conn, "smoke_test", "ok", nil)
   {:ok, stmt} = Exqlite.Sqlite3.prepare(conn, "SELECT step, status, detail FROM smoke_test_runs ORDER BY id")
@@ -47,3 +50,4 @@ for file <- System.argv() do
   if extension, do: System.put_env("SMOKE_WEFTFDB_EXTENSION", extension), else: System.delete_env("SMOKE_WEFTFDB_EXTENSION")
   IO.puts("#{Path.basename(file)}: missing extension is an error, as planted")
 end
+IO.puts(:stderr, "DIAG done")
