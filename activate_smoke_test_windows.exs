@@ -57,9 +57,18 @@ defmodule MetaXRSmokeTest.Windows do
         )
 
     with :ok <- load_extension(extension),
-         {:ok, conn} <- Exqlite.Sqlite3.open(db) do
+         {:ok, conn} <- Exqlite.Sqlite3.open(db),
+         :ok <- pragmas(conn, extension) do
       {:ok, conn}
     end
+  end
+
+  # A weft_fdb database is opened the way zone-backend opens one: the
+  # rollback journal in memory and the database held by this connection.
+  defp pragmas(_conn, nil), do: :ok
+
+  defp pragmas(conn, _extension) do
+    Exqlite.Sqlite3.execute(conn, "PRAGMA journal_mode = MEMORY; PRAGMA locking_mode = EXCLUSIVE")
   end
 
   defp load_extension(nil), do: :ok
